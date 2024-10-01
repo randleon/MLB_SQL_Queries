@@ -1,0 +1,123 @@
+--Question 1
+--For each year, give the number of MLB players who had a batting average over .300. Only
+--consider players with more than 50 at bats
+
+SELECT 
+    yearID AS year, 
+    COUNT(*) AS players_over_300_BA
+FROM 
+    Batting
+WHERE 
+    AB > 50
+    AND (CAST(H AS FLOAT) / AB) > 0.300
+GROUP BY 
+    yearID;
+
+
+--Question 2
+--For each year since 1930, give the MLB player with the most home runs from each league.
+--Please include their league, team, and batting average.
+--If the player played on more than 1 team in a season, give the team information for the last team he played for.
+--If there is a tie, include the player with the higher number of RBI’s.
+--If there is still a tie, pick the player with the lower playerID.
+
+--First, we need to make a common table expression so we can query 
+--from the subset of data and then join afterwards
+WITH RankedPlayers AS (
+    SELECT 
+        b.yearID, --year
+        b.lgID, --American League or National League, AL or NL
+        b.playerID, --unique player id
+        b.teamID, --unique team id
+        b.stint, --this number represents the order of which that player 
+        --appeared for that particular team, 
+        --if a player has 1 for BOS and 2 for NYA, 
+        --he started the season with Boston and ended with the 
+        --Yankees in the same season
+        (CAST(b.H AS FLOAT) / b.AB) AS batting_avg, -- needed to calculate batting average.
+        b.HR, --home runs are the primary measure by which we are 
+        b.RBI,--need to include RBIs in case of a tie
+        ROW_NUMBER() OVER (
+            PARTITION BY b.yearID, b.lgID --gets the top result for a single year for AL/NL
+            ORDER BY b.HR DESC, b.RBI DESC, b.playerID ASC --this window function is what gives us the highest
+            --homerun hitter by year,then league ordered by the most homeruns, 
+            --then settles the tie with RBIS, 
+            --then settles THAT tie with the lower PlayerID
+        ) AS rank --name of our CTE, 'rank'
+    FROM 
+        Batting b --Common Table Expression from our Batting Table (b)
+    WHERE 
+        b.yearID >= 1930 --for each year since 1930
+),
+--Second CTE used to ensure that if player played for more than one team in a season, that we give the team information of the last team he played for
+LastTeam AS (
+    SELECT 
+        b.playerID,
+        b.yearID,
+        b.lgID,
+        MAX(b.stint) AS last_stint --choosing the max stint ensures the last team
+        --the player played for
+    FROM 
+        Batting b
+    GROUP BY 
+        b.playerID, b.yearID, b.lgID
+)
+--Final Select Statement joining our Common Table Expressions together 
+SELECT 
+    r.yearID AS year,
+    r.lgID AS league,
+    p.nameFirst || ' ' || p.nameLast AS player_name, --first and last name concatenator
+    r.teamID AS team,
+    ROUND(r.batting_avg,3) AS batting_avg, --rounding our batting average to
+    --three decimal places, as batting averages should be
+    r.HR AS home_runs,
+    r.RBI
+FROM 
+    RankedPlayers r
+JOIN --joining last team CTE with rankedplayers CTE on playerid, year, and league
+    LastTeam lt ON r.playerID = lt.playerID AND r.yearID = lt.yearID AND r.lgID = lt.lgID
+JOIN --bringing in the players names by via a join with our people table based on the primary key they share
+    People p ON r.playerID = p.playerID
+WHERE 
+    r.rank = 1 --top home run hitter
+    AND r.stint = lt.last_stint --last team they played for
+ORDER BY 
+    r.yearID, r.lgID;
+
+--Question 3
+--What teams have had the highest slugging percentage?
+--Your output should give the top 10 historical team slugging percentages
+--the year it occured,
+--and the team name.
+
+--We start this query with yet another Common Table Expression
+--This time, calculating slugging percentage
+WITH TeamSlugging AS (
+    SELECT
+        b.yearID AS year,
+        b.teamID AS team,
+        SUM(b.H - b."2B" - b."3B" - b.HR) AS singles, -- 1B = Hits - (2B + 3B + HR)
+        SUM(b."2B") AS doubles,
+        SUM(b."3B") AS triples,
+        SUM(b.HR) AS home_runs,
+        SUM(b.AB) AS at_bats,
+        (CAST(SUM(b.H - b."2B" - b."3B" - b.HR) AS FLOAT)  -- (Singles)
+         + 2 * SUM(b."2B") -- 2B x 2 (Doubles)
+         + 3 * SUM(b."3B") -- 3B x 3 (Triples)
+         + 4 * SUM(b.HR))  -- HR x 4 (Home Runs)
+         / SUM(b.AB) AS slugging_percentage
+    FROM
+        Batting b --gathered from our batting table
+    GROUP BY
+        b.yearID, b.teamID --grouped by year and team
+)
+--Our final select statement simply orders our top ten teams by SP in descending order.
+SELECT
+    ts.year,
+    ts.team AS teamID,
+    printf('%.3f', ts.slugging_percentage) AS slugging_percentage -- Ensures 3 decimal places
+FROM
+    TeamSlugging ts
+ORDER BY
+    ts.slugging_percentage DESC
+LIMIT 10;
